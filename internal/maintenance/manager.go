@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"task106/internal/model"
+	"task106/internal/namespace"
 	"time"
 )
 
@@ -29,7 +30,12 @@ func (m *Manager) Create(req model.MaintenanceCreateRequest) (*model.Maintenance
 	if req.Mode != model.MaintenanceDrain && req.Mode != model.MaintenanceForce {
 		return nil, ErrInvalidWindow
 	}
-	existing, err := m.store.ListMaintenanceWindows(req.ResourcePath)
+	// A maintenance window covers a coordination scope: its resource path plus
+	// every ancestor and descendant. A new window conflicts with an existing one
+	// when their coordination scopes overlap (parent/child or same resource) and
+	// their time windows overlap. The store's exact-path lookup would miss the
+	// ancestor/descendant case, so load every window and compare scopes directly.
+	existing, err := m.store.ListMaintenanceWindows("")
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +43,9 @@ func (m *Manager) Create(req model.MaintenanceCreateRequest) (*model.Maintenance
 		if item.Status == "cancelled" || item.EndAt.Before(req.StartAt) || item.StartAt.After(req.EndAt) {
 			continue
 		}
-		return nil, ErrWindowOverlap
+		if namespace.Overlaps(req.ResourcePath, item.ResourcePath) {
+			return nil, ErrWindowOverlap
+		}
 	}
 	window := &model.MaintenanceWindow{ResourcePath: req.ResourcePath, Mode: req.Mode, StartAt: req.StartAt, EndAt: req.EndAt, Reason: req.Reason, Operator: req.Operator, Status: statusFor(req.StartAt, req.EndAt, time.Now().UTC()), CreatedAt: time.Now().UTC()}
 	if err := m.store.CreateMaintenanceWindow(window); err != nil {
